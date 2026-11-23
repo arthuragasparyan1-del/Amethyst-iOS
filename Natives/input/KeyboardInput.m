@@ -1,22 +1,29 @@
+
 #import "KeyboardInput.h"
 #import "../utils.h"
 
 #include "../glfw_keycodes.h"
-#include "../sdl3_hook.h"
+
+extern bool isUseStackQueueCall;
 
 @implementation KeyboardInput
 
-int keycodeTable[UIKeyboardHIDUsageKeyboardRightGUI+1];
+int keycodeTable[UIKeyboardHIDUsageKeyboardRightGUI + 1];
 
 + (void)initKeycodeTable {
-    for (int i = UIKeyboardHIDUsageKeyboardA; i <= UIKeyboardHIDUsageKeyboardZ; i++) {
-        keycodeTable[i] = i - UIKeyboardHIDUsageKeyboardA + GLFW_KEY_A;
+    for (int i = UIKeyboardHIDUsageKeyboardA;
+         i <= UIKeyboardHIDUsageKeyboardZ; i++) {
+        keycodeTable[i] =
+            i - UIKeyboardHIDUsageKeyboardA + GLFW_KEY_A;
     }
 
-    // 0-9 keys
+    // Number keys
     keycodeTable[UIKeyboardHIDUsageKeyboard0] = GLFW_KEY_0;
-    for (int i = UIKeyboardHIDUsageKeyboard1; i <= UIKeyboardHIDUsageKeyboard9; i++) {
-        keycodeTable[i] = i - UIKeyboardHIDUsageKeyboard1 + GLFW_KEY_1;
+
+    for (int i = UIKeyboardHIDUsageKeyboard1;
+         i <= UIKeyboardHIDUsageKeyboard9; i++) {
+        keycodeTable[i] =
+            i - UIKeyboardHIDUsageKeyboard1 + GLFW_KEY_1;
     }
 
     // Arrow keys
@@ -52,7 +59,7 @@ int keycodeTable[UIKeyboardHIDUsageKeyboardRightGUI+1];
     keycodeTable[UIKeyboardHIDUsageKeyboardPageUp] = GLFW_KEY_PAGE_UP;
     keycodeTable[UIKeyboardHIDUsageKeyboardPageDown] = GLFW_KEY_PAGE_DOWN;
 
-    // Some other keys
+    // Other keys
     keycodeTable[UIKeyboardHIDUsageKeyboardHome] = GLFW_KEY_HOME;
     keycodeTable[UIKeyboardHIDUsageKeyboardEscape] = GLFW_KEY_ESCAPE;
     keycodeTable[UIKeyboardHIDUsageKeyboardTab] = GLFW_KEY_TAB;
@@ -79,60 +86,72 @@ int keycodeTable[UIKeyboardHIDUsageKeyboardRightGUI+1];
     keycodeTable[UIKeyboardHIDUsageKeypadEnter] = GLFW_KEY_NUMPAD_ENTER;
     keycodeTable[UIKeyboardHIDUsageKeypadEqualSign] = GLFW_KEY_NUMPAD_EQUAL;
     keycodeTable[UIKeyboardHIDUsageKeypad0] = GLFW_KEY_NUMPAD_0;
-    for (int i = UIKeyboardHIDUsageKeypad1; i <= UIKeyboardHIDUsageKeypad9; i++) {
-        keycodeTable[i] = i - UIKeyboardHIDUsageKeypad1 + GLFW_KEY_NUMPAD_1;
+
+    for (int i = UIKeyboardHIDUsageKeypad1;
+         i <= UIKeyboardHIDUsageKeypad9; i++) {
+        keycodeTable[i] =
+            i - UIKeyboardHIDUsageKeypad1 + GLFW_KEY_NUMPAD_1;
     }
 
     // Function keys
-    for (int i = UIKeyboardHIDUsageKeyboardF1; i <= UIKeyboardHIDUsageKeyboardF12; i++) {
-        keycodeTable[i] = i - UIKeyboardHIDUsageKeyboardF1 + GLFW_KEY_F1;
+    for (int i = UIKeyboardHIDUsageKeyboardF1;
+         i <= UIKeyboardHIDUsageKeyboardF12; i++) {
+        keycodeTable[i] =
+            i - UIKeyboardHIDUsageKeyboardF1 + GLFW_KEY_F1;
     }
 }
 
 + (BOOL)sendKeyEvent:(UIKey *)key down:(BOOL)isDown {
-    return [self sendKeyEvent:key down:isDown textFieldActive:NO];
-}
-
-+ (BOOL)sendKeyEvent:(UIKey *)key down:(BOOL)isDown textFieldActive:(BOOL)textFieldActive {
     char modifiers = 0;
 
-    // convert UIKey's modifiers to GLFW
+    // Convert UIKey modifiers to GLFW modifiers
     if (key.modifierFlags & UIKeyModifierAlphaShift) {
         modifiers |= GLFW_MOD_CAPS_LOCK;
     }
+
     if (key.modifierFlags & UIKeyModifierShift) {
         modifiers |= GLFW_MOD_SHIFT;
     }
+
     if (key.modifierFlags & UIKeyModifierAlternate) {
         modifiers |= GLFW_MOD_ALT;
     }
+
     if (key.modifierFlags & UIKeyModifierControl) {
         modifiers |= GLFW_MOD_CONTROL;
     }
 
-    // send the keycode
+    // Send the physical key event
     int keycode = keycodeTable[key.keyCode];
-    if (textFieldActive && (keycode == GLFW_KEY_BACKSPACE || keycode == GLFW_KEY_ENTER)) {
-        return YES;
-    }
+
     if (keycode != 0) {
-        CallbackBridge_nativeSendKey(keycode, 0 /* scancode */, isDown, modifiers);
+        CallbackBridge_nativeSendKey(
+            keycode,
+            0,
+            isDown,
+            modifiers
+        );
     } else {
-        NSLog(@"KeyboardInput: Unhandled key %lu", (unsigned long)key.keyCode);
+        NSLog(
+            @"KeyboardInput: Unhandled key %lu",
+            (unsigned long)key.keyCode
+        );
     }
 
-    // key.characters.length < 11: skip sending characters if the string starts with UIKeyInput
-    if (isDown && !textFieldActive && key.characters.length < 11) {
+    // Send character input through ONE callback only.
+    // This avoids sending each character twice.
+    if (isDown && key.characters.length < 11) {
         for (int i = 0; i < key.characters.length; i++) {
             int keychar = [key.characters characterAtIndex:i];
-            if (AmethystSDL3InputActive()) {
-                if (keychar >= 0x20 && keychar != 0x7F) {
-                    CallbackBridge_nativeSendChar(keychar);
-                }
-                continue;
+
+            if (isUseStackQueueCall) {
+                CallbackBridge_nativeSendCharMods(
+                    keychar,
+                    modifiers
+                );
+            } else {
+                CallbackBridge_nativeSendChar(keychar);
             }
-            CallbackBridge_nativeSendCharMods(keychar, modifiers);
-            CallbackBridge_nativeSendChar(keychar);
         }
     }
 
