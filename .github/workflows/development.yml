@@ -11,9 +11,14 @@ on:
       - 'l10n_main'
   workflow_dispatch:
 
+concurrency:
+  group: amethyst-ios-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Development build
+
     strategy:
       matrix:
         include:
@@ -33,7 +38,9 @@ jobs:
           ls -lah ./
 
       - name: Checkout repository
-        uses: actions/checkout@main
+        uses: actions/checkout@v4
+        with:
+          submodules: false
 
       - name: Checkout repository submodules
         env:
@@ -42,25 +49,34 @@ jobs:
           git lfs install --skip-smudge
           git config --global filter.lfs.smudge "git-lfs smudge --skip -- %f"
           git config --global filter.lfs.process "git-lfs filter-process --skip"
-
           git submodule sync --recursive
           git submodule update --init --recursive
 
       - name: Setup Xcode Version
-        uses: maxim-lobanov/setup-xcode@master
+        uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: '26.5'
 
+      - name: Cache Homebrew downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+          key: homebrew-${{ runner.os }}-${{ runner.arch }}-amethyst-v1
+
       - name: Install Dependencies
-        run: brew install make ldid temurin@8
+        run: |
+          brew install make ldid temurin@8
 
       - name: Get gl4es latest commit hash
         id: gl4es-sha
-        run: echo "::set-output name=sha::$(echo $(git ls-remote https://github.com/PojavLauncherTeam/gl4es-114-extra refs/heads/master | grep -io '^\S*'))"
         shell: bash
+        run: |
+          SHA=$(git ls-remote https://github.com/PojavLauncherTeam/gl4es-114-extra refs/heads/master | awk '{print $1}')
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Cache gl4es
-        uses: actions/cache@main
+        uses: actions/cache@v4
         if: false
         id: gl4es-cache
         with:
@@ -69,10 +85,10 @@ jobs:
 
       - name: Get gl4es
         if: false && steps.gl4es-cache.outputs.cache-hit != 'true'
-        uses: actions/checkout@main
+        uses: actions/checkout@v4
         with:
-          repository: 'PojavLauncherTeam/gl4es-114-extra'
-          path: 'gl4es'
+          repository: PojavLauncherTeam/gl4es-114-extra
+          path: gl4es
 
       - name: Build gl4es
         if: false && steps.gl4es-cache.outputs.cache-hit != 'true'
@@ -104,19 +120,19 @@ jobs:
           gmake -j$(sysctl -n hw.ncpu) dsym package PLATFORM=${{ matrix.platform }}
 
       - name: Upload regular IPA
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v4
         with:
           name: org.angelauramc.amethyst-${{ matrix.platform_name }}.ipa
           path: artifacts/org.angelauramc.amethyst-*-${{ matrix.platform_name }}.ipa
 
       - name: Upload slimmed IPA
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v4
         with:
           name: org.angelauramc.amethyst.slimmed-${{ matrix.platform_name }}.ipa
           path: artifacts/org.angelauramc.amethyst.slimmed-*-${{ matrix.platform_name }}.ipa
 
       - name: Upload PojavLauncher.dSYM
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v4
         if: matrix.platform_name == 'ios'
         with:
           name: AngelAuraAmethyst.dSYM
