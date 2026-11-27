@@ -1,3 +1,4 @@
+
 /*
  * V3 input bridge implementation.
  *
@@ -605,6 +606,7 @@ BOOL CallbackBridge_nativeSendCharMods(jchar codepoint, int mods) {
     }
     return NO;
 }
+
 /*
 JNIEXPORT void JNICALL Java_org_lwjgl_glfw_CallbackBridge_nativeSendCursorEnter(JNIEnv* env, jclass clazz, jint entered) {
     if (GLFW_invoke_CursorEnter && isInputReady) {
@@ -612,6 +614,7 @@ JNIEXPORT void JNICALL Java_org_lwjgl_glfw_CallbackBridge_nativeSendCursorEnter(
     }
 }
 */
+
 void CallbackBridge_nativeSendCursorPos(char event, CGFloat x, CGFloat y) {
     if (AmethystSDL3InputActive()) {
         if (!isGrabbing && windowWidth > 0 && windowHeight > 0) {
@@ -657,60 +660,92 @@ void CallbackBridge_nativeSendCursorPos(char event, CGFloat x, CGFloat y) {
     }
 }
 
-char getKeyModifiers(int key, int action) {
-    static char currMods;
-    char mod;
+// Keep track of the physical modifier keys ourselves.
+// GLFW_PRESS and GLFW_REPEAT mean the key is down; GLFW_RELEASE means it is up.
+int getKeyModifiers(int key, int action) {
+    static int currMods;
+
+    int mod;
     switch (key) {
         case GLFW_KEY_LEFT_SHIFT:
+        case GLFW_KEY_RIGHT_SHIFT:
             mod = GLFW_MOD_SHIFT;
             break;
+
         case GLFW_KEY_LEFT_CONTROL:
+        case GLFW_KEY_RIGHT_CONTROL:
             mod = GLFW_MOD_CONTROL;
             break;
+
         case GLFW_KEY_LEFT_ALT:
+        case GLFW_KEY_RIGHT_ALT:
             mod = GLFW_MOD_ALT;
             break;
+
+        case GLFW_KEY_LEFT_SUPER:
+        case GLFW_KEY_RIGHT_SUPER:
+            mod = GLFW_MOD_SUPER;
+            break;
+
         case GLFW_KEY_CAPS_LOCK:
             mod = GLFW_MOD_CAPS_LOCK;
             break;
+
         case GLFW_KEY_NUM_LOCK:
             mod = GLFW_MOD_NUM_LOCK;
             break;
+
         default:
+            // key == 0 is used to retrieve the current modifier state.
             return currMods;
     }
-    if (action) {
-        currMods |= mod;
-    } else {
+
+    if (action == 0) {
         currMods &= ~mod;
+    } else {
+        currMods |= mod;
     }
+
     return currMods;
 }
 
 void CallbackBridge_nativeSendKey(int key, int scancode, int action, int mods) {
+    // Update our own modifier state on every physical modifier event.
+    int trackedMods = getKeyModifiers(key, action);
+
+    const int trackedModifierMask =
+        GLFW_MOD_SHIFT |
+        GLFW_MOD_CONTROL |
+        GLFW_MOD_ALT |
+        GLFW_MOD_SUPER;
+
+    // Use our tracked physical-key state for modifier keys.
+    // Preserve platform flags that are not part of the tracked mask.
+    int effectiveMods =
+        (mods & ~trackedModifierMask) |
+        (trackedMods & trackedModifierMask);
+
     if (AmethystSDL3InputActive()) {
         // no return: the ctrl -> super duplication below still applies
-        AmethystSDL3ForwardInput(AM_SDL_INPUT_KEY, key, scancode, action, mods != 0 ? mods : getKeyModifiers(key, action), 0, 0);
+        AmethystSDL3ForwardInput(AM_SDL_INPUT_KEY, key, scancode, action, effectiveMods, 0, 0);
     }
+
     if (GLFW_invoke_Key && isInputReady) {
         if (keyDownBuffer == NULL) ensureGLFWBridge();
-        if (keyDownBuffer != NULL) keyDownBuffer[MAX(0, key-31)]=(jbyte)action;
-        if (mods == 0) {
-            mods = getKeyModifiers(key, action);
-        }
+        if (keyDownBuffer != NULL) keyDownBuffer[MAX(0, key-31)] = (jbyte)action;
 
         if (isUseStackQueueCall) {
-            sendData(EVENT_TYPE_KEY, key, scancode, action, mods);
+            sendData(EVENT_TYPE_KEY, key, scancode, action, effectiveMods);
         } else {
-            GLFW_invoke_Key((void*) showingWindow, key, scancode, action, mods);
+            GLFW_invoke_Key((void*) showingWindow, key, scancode, action, effectiveMods);
         }
     }
 
-    // On macOS, Minecraft expects the Command key
+    // On macOS, Minecraft expects the Command key.
     if (key == GLFW_KEY_LEFT_CONTROL) {
-        CallbackBridge_nativeSendKey(GLFW_KEY_LEFT_SUPER, 0, action, mods);
+        CallbackBridge_nativeSendKey(GLFW_KEY_LEFT_SUPER, 0, action, effectiveMods);
     } else if (key == GLFW_KEY_RIGHT_CONTROL) {
-        CallbackBridge_nativeSendKey(GLFW_KEY_RIGHT_SUPER, 0, action, mods);
+        CallbackBridge_nativeSendKey(GLFW_KEY_RIGHT_SUPER, 0, action, effectiveMods);
     }
 }
 
@@ -719,17 +754,36 @@ void CallbackBridge_nativeSendMouseButton(int button, int action, int mods) {
         AmethystSDL3ForwardInput(AM_SDL_INPUT_BUTTON, button, action, 0, 0, 0, 0);
         return;
     }
+
     if (isInputReady) {
         if (button == -1) {
-        } else if (GLFW_invoke_MouseButton) {
-            if (mods == 0) {
-                mods = getKeyModifiers(0, action);
-            }
+            return;
+        }
+
+        if (GLFW_invoke_MouseButton) {
+            // Always use the locally tracked physical modifier state.
+            // The modifier flags supplied by iOS can be stale after Shift is released.
+            int trackedMods = getKeyModifiers(0, 0);
+
+            const int trackedModifierMask =
+                GLFW_MOD_SHIFT |
+                GLFW_MOD_CONTROL |
+                GLFW_MOD_ALT |
+                GLFW_MOD_SUPER;
+
+            int effectiveMods =
+                (mods & ~trackedModifierMask) |
+                (trackedMods & trackedModifierMask);
 
             if (isUseStackQueueCall) {
-                sendData(EVENT_TYPE_MOUSE_BUTTON, button, action, mods, 0);
+                sendData(EVENT_TYPE_MOUSE_BUTTON, button, action, effectiveMods, 0);
             } else {
-                GLFW_invoke_MouseButton((void*) showingWindow, button, action, mods);
+                GLFW_invoke_MouseButton(
+                    (void*) showingWindow,
+                    button,
+                    action,
+                    effectiveMods
+                );
             }
         }
     }
@@ -750,6 +804,7 @@ void CallbackBridge_nativeSendScreenSize(int width, int height) {
                 GLFW_invoke_FramebufferSize((void*) showingWindow, width, height);
             }
         }
+
         if (GLFW_invoke_WindowSize) {
             if (isUseStackQueueCall) {
                 sendData(EVENT_TYPE_WINDOW_SIZE, width, height, 0, 0);
@@ -767,6 +822,7 @@ void CallbackBridge_nativeSendScroll(CGFloat xoffset, CGFloat yoffset) {
         AmethystSDL3ForwardInput(AM_SDL_INPUT_SCROLL, 0, 0, 0, 0, (float)xoffset, (float)yoffset);
         return;
     }
+
     if (GLFW_invoke_Scroll && isInputReady) {
         if (isUseStackQueueCall) {
             sendDataFloat(EVENT_TYPE_SCROLL, xoffset, yoffset, 0, 0);
